@@ -234,13 +234,14 @@ async function onReorder() {
 
 function rowClass(row: main.DisplayRowDTO, idx: number) {
   const losses = row.mod?.losses ?? 0
-  const wins = row.mod?.wins ?? 0
+  const fileCount = row.mod?.fileCount ?? 0
+  const fullyOverridden = fileCount > 0 && losses >= fileCount
   return {
     'row-selected': selectedNames.value.includes(row.name),
     'row-missing': row.missing,
     'row-new': row.unlisted && !row.missing,
-    'row-losing-all': !row.missing && !row.unlisted && losses > 0 && wins === 0,
-    'row-conflict': !row.missing && !row.unlisted && losses > 0 && wins > 0,
+    'row-fully-overridden': !row.missing && !row.unlisted && fullyOverridden,
+    'row-conflict': !row.missing && !row.unlisted && losses > 0 && !fullyOverridden,
     'row-clickable': !row.missing,
   }
 }
@@ -355,14 +356,20 @@ th {
 }
 .row-selected td {
   background: var(--cp-row-selected) !important;
+}
+.row-selected td:first-child {
   border-left: 2px solid var(--cp-focus) !important;
 }
-.row-losing-all td {
+.row-fully-overridden td {
   color: var(--cp-dim);
+}
+.row-fully-overridden td:first-child {
   border-left: 2px solid var(--cp-dim);
 }
 .row-conflict td {
   background: var(--cp-row-conflict);
+}
+.row-conflict td:first-child {
   border-left: 2px solid var(--cp-error);
 }
 .row-missing td {
@@ -372,6 +379,8 @@ th {
 }
 .row-new td {
   background: var(--cp-row-new);
+}
+.row-new td:first-child {
   border-left: 2px solid var(--cp-primary);
 }
 
