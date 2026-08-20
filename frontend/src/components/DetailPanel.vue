@@ -28,9 +28,26 @@
     <div v-if="mod.conflictsWith?.length" class="detail-section section-conflicts">
       <div class="section-title section-title--conflict">Conflicts</div>
       <div class="conflict-list">
-        <div v-for="entry in groupedConflicts" :key="entry.opponent" class="conflict-entry">
-          <span class="text-error">{{ entry.opponent }}</span>
-          <span class="conflict-count">{{ entry.count }}</span>
+        <div v-for="entry in groupedConflicts" :key="entry.opponent" class="conflict-group">
+          <button
+            type="button"
+            class="conflict-entry"
+            :aria-expanded="isExpanded(entry.opponent)"
+            @click="toggleConflict(entry.opponent)"
+          >
+            <span class="conflict-opponent text-error">
+              <ChevronDown v-if="isExpanded(entry.opponent)" :size="13" />
+              <ChevronRight v-else :size="13" />
+              <span>{{ entry.opponent }}</span>
+            </span>
+            <span class="conflict-count">{{ entry.resources.length }}</span>
+          </button>
+          <div v-if="isExpanded(entry.opponent)" class="conflict-resources">
+            <div v-for="(resource, index) in entry.resources" :key="resource" class="conflict-resource">
+              <span class="resource-index">{{ index + 1 }}</span>
+              <span class="resource-path" :title="resource">{{ resource }}</span>
+            </div>
+          </div>
         </div>
         <div v-if="mod.hasMore" class="text-dim" style="padding: 4px 0">…and {{ mod.moreCount }} more</div>
       </div>
@@ -58,7 +75,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 import type { main } from '../../wailsjs/go/models'
 import { useWails } from '../composables/useWails'
 import PriorityBadge from './PriorityBadge.vue'
@@ -75,14 +93,41 @@ const wails = useWails()
 const prioDialog = ref<HTMLDialogElement>()
 const prioInput = ref<HTMLInputElement>()
 const prioText = ref('')
+const expandedOpponents = ref(new Set<string>())
 
 const groupedConflicts = computed(() => {
-  const map = new Map<string, number>()
+  const map = new Map<string, Set<string>>()
   for (const pair of props.mod.conflictsWith ?? []) {
-    map.set(pair.opponent, (map.get(pair.opponent) ?? 0) + 1)
+    let resources = map.get(pair.opponent)
+    if (!resources) {
+      resources = new Set<string>()
+      map.set(pair.opponent, resources)
+    }
+    resources.add(pair.resource)
   }
-  return Array.from(map.entries()).map(([opponent, count]) => ({ opponent, count }))
+  return Array.from(map.entries()).map(([opponent, resources]) => ({
+    opponent,
+    resources: Array.from(resources),
+  }))
 })
+
+watch(
+  () => props.mod.name,
+  () => {
+    expandedOpponents.value = new Set()
+  }
+)
+
+function isExpanded(opponent: string): boolean {
+  return expandedOpponents.value.has(opponent)
+}
+
+function toggleConflict(opponent: string) {
+  const next = new Set(expandedOpponents.value)
+  if (next.has(opponent)) next.delete(opponent)
+  else next.add(opponent)
+  expandedOpponents.value = next
+}
 
 function openPrioForm() {
   prioText.value = props.mod.priority > 0 ? String(props.mod.priority) : ''
@@ -183,12 +228,39 @@ async function clearPriority() {
   max-height: 260px;
   overflow-y: auto;
 }
+.conflict-group {
+  border-bottom: 1px solid var(--cp-border);
+}
 .conflict-entry {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--cp-border);
+  gap: 8px;
+  width: 100%;
+  padding: 5px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.conflict-entry:hover {
+  background: rgba(255, 51, 102, 0.08);
+}
+.conflict-opponent {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.conflict-opponent span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conflict-opponent svg {
+  flex-shrink: 0;
 }
 .conflict-count {
   font-size: 10px;
@@ -199,6 +271,30 @@ async function clearPriority() {
   color: var(--cp-error);
   border: 1px solid var(--cp-error);
   flex-shrink: 0;
+}
+.conflict-resources {
+  padding: 2px 4px 6px 18px;
+}
+.conflict-resource {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 0;
+  color: var(--cp-dim);
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.resource-index {
+  min-width: 16px;
+  color: var(--cp-error);
+  text-align: right;
+  flex-shrink: 0;
+}
+.resource-path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .prio-dialog {
   min-width: 300px;
