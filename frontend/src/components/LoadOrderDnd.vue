@@ -1,7 +1,15 @@
 <template>
   <div class="dnd-wrap">
     <div v-if="loading" class="text-dim" style="padding: 8px">Loading…</div>
-    <draggable v-else v-model="localOrder" item-key="name" handle=".drag-handle" :animation="150" @end="onReorder">
+    <draggable
+      v-else
+      v-model="localOrder"
+      item-key="name"
+      handle=".drag-handle"
+      :animation="150"
+      @start="onDragStart"
+      @end="onReorder"
+    >
       <template #item="{ element }">
         <div class="dnd-row" :class="rowClass(element)">
           <GripVertical class="drag-handle" :size="16" />
@@ -24,6 +32,7 @@ const props = defineProps<{ anchorName: string }>()
 const wails = useWails()
 const localOrder = ref<string[]>([])
 const loading = ref(true)
+let draggedName: string | null = null
 
 async function load() {
   loading.value = true
@@ -38,8 +47,15 @@ async function load() {
 onMounted(load)
 watch(() => props.anchorName, load)
 
+function onDragStart(event: { oldIndex?: number }) {
+  draggedName = event.oldIndex == null ? null : (localOrder.value[event.oldIndex] ?? null)
+}
+
 async function onReorder() {
-  await wails.reorderGroup(localOrder.value)
+  const movedName = draggedName
+  draggedName = null
+  if (!movedName) return
+  await wails.reorderGroup(localOrder.value, movedName)
 }
 
 function rowClass(name: string): string {

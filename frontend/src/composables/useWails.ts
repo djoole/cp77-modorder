@@ -60,9 +60,9 @@ export function useWails() {
     }
   }
 
-  async function reorderGroup(names: string[]) {
+  async function reorderGroup(names: string[], movedName: string) {
     try {
-      const result = await App.ReorderConflictGroup(names)
+      const result = await App.ReorderConflictGroup(names, movedName)
       store.updateScanResult(result)
       store.dirty = true
     } catch (e: any) {

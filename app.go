@@ -11,24 +11,24 @@ import (
 	"time"
 
 	"github.com/Mordeak/cp77-modorder-gui/internal/archive"
-	"github.com/Mordeak/cp77-modorder-gui/internal/conflict"
 	"github.com/Mordeak/cp77-modorder-gui/internal/config"
+	"github.com/Mordeak/cp77-modorder-gui/internal/conflict"
 	"github.com/Mordeak/cp77-modorder-gui/internal/modlist"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the Wails application struct. All exported methods are auto-bound to JS.
 type App struct {
-	ctx          context.Context
-	cfg          *config.Config
-	cfgPath      string
-	result       *conflict.Result
-	modDir               string
-	modlistOrder         []string
-	modlistSet           map[string]bool
-	initialModlistOrder  []string // snapshot of modlist order at last scan, used for Apply diff
-	pathMap      map[string]string // "0x<hex>" → human-readable resource path (from LXRS footers)
-	modStructure string            // "default" | "MO2" — set from CLI flag, not persisted
+	ctx                 context.Context
+	cfg                 *config.Config
+	cfgPath             string
+	result              *conflict.Result
+	modDir              string
+	modlistOrder        []string
+	modlistSet          map[string]bool
+	initialModlistOrder []string          // snapshot of modlist order at last scan, used for Apply diff
+	pathMap             map[string]string // "0x<hex>" → human-readable resource path (from LXRS footers)
+	modStructure        string            // "default" | "MO2" — set from CLI flag, not persisted
 }
 
 // NewApp creates the App with a loaded config.
@@ -330,107 +330,69 @@ func (a *App) GetConflictGroup(name string) (ConflictGroupDTO, error) {
 	return ConflictGroupDTO{Mods: names}, nil
 }
 
-// ReorderConflictGroup reorders the conflict-group mods relative to each
-// other without moving them to the top of the global load order.
-//
-// Strategy: the group mods collectively occupy a set of "slots" in the
-// current sorted list. We redistribute those slots to the mods in the
-// user's requested order instead of blindly assigning priorities 1, 2, 3.
-//
-// Special case: if every group mod is currently unset (priority 0) we give
-// them explicit priorities placed just after the last explicitly-prioritised
-// non-group mod, so they stay near the end of the priority zone rather than
-// jumping to the very top.
-func (a *App) ReorderConflictGroup(names []string) (ScanResultDTO, error) {
+// ReorderConflictGroup moves one dragged mod within its conflict group while
+// preserving the global positions of every untouched mod. The requested group
+// order is used to determine whether the dragged mod should be inserted before
+// its next group neighbour or after its previous one.
+func (a *App) ReorderConflictGroup(names []string, movedName string) (ScanResultDTO, error) {
 	if a.result == nil {
 		return ScanResultDTO{}, fmt.Errorf("no scan results")
 	}
 
-	// Build name→mod lookup.
-	nameIdx := make(map[string]*conflict.ModInfo, len(a.result.Mods))
-	for _, m := range a.result.Mods {
-		nameIdx[m.Name] = m
+	if len(names) < 2 {
+		return a.buildScanResult(), nil
 	}
 
-	// Current position of every mod in the already-sorted slice.
-	posOf := make(map[string]int, len(a.result.Mods))
-	for i, m := range a.result.Mods {
-		posOf[m.Name] = i
+	movedIdx := slices.Index(names, movedName)
+	if movedIdx < 0 {
+		return ScanResultDTO{}, fmt.Errorf("moved mod %q is not in the conflict group", movedName)
 	}
 
-	// Sort the group mods by their current global position so we know which
-	// priority "slot" each one occupies.
-	type slot struct {
-		name string
-		pos  int
-	}
-	slots := make([]slot, len(names))
-	for i, name := range names {
-		slots[i] = slot{name, posOf[name]}
-	}
-	sort.Slice(slots, func(i, j int) bool { return slots[i].pos < slots[j].pos })
-
-	// Collect the priority values that the slots currently hold, in position order.
-	slotPrios := make([]int, len(slots))
-	for i, s := range slots {
-		slotPrios[i] = nameIdx[s.name].Priority
-	}
-
-	// If every group mod is unset (priority 0) we cannot preserve relative
-	// ordering through 0 alone (sortMods would just re-alphabetise them).
-	// Instead, anchor the group just after the last explicitly-prioritised
-	// non-group mod so they stay at the bottom of the priority zone.
+	order := a.completeModlistOrder()
+	currentGroupOrder := make([]string, 0, len(names))
 	groupSet := make(map[string]bool, len(names))
 	for _, name := range names {
+		if groupSet[name] {
+			return ScanResultDTO{}, fmt.Errorf("duplicate mod %q in conflict group", name)
+		}
 		groupSet[name] = true
 	}
-
-	allZero := true
-	for _, p := range slotPrios {
-		if p != 0 {
-			allZero = false
-			break
+	for _, name := range order {
+		if groupSet[name] {
+			currentGroupOrder = append(currentGroupOrder, name)
 		}
 	}
-	if allZero {
-		maxPrio := 0
-		for _, m := range a.result.Mods {
-			if !groupSet[m.Name] && m.Priority > maxPrio {
-				maxPrio = m.Priority
-			}
-		}
-		for i := range slotPrios {
-			slotPrios[i] = maxPrio + i + 1
-		}
+	if len(currentGroupOrder) != len(names) {
+		return ScanResultDTO{}, fmt.Errorf("conflict group contains an unknown mod")
+	}
+	if slices.Equal(currentGroupOrder, names) {
+		return a.buildScanResult(), nil
 	}
 
-	// Redistribute: the i-th mod in the user's new order inherits the priority
-	// that belonged to the i-th slot in the current (position-sorted) order.
-	for i, name := range names {
-		if m, ok := nameIdx[name]; ok {
-			m.Priority = slotPrios[i]
-			a.cfg.Priorities[name] = slotPrios[i]
+	// Remove only the dragged mod; every untouched row keeps its global place.
+	oldIdx := slices.Index(order, movedName)
+	if oldIdx < 0 {
+		return ScanResultDTO{}, fmt.Errorf("moved mod %q is not in the load order", movedName)
+	}
+	order = append(order[:oldIdx], order[oldIdx+1:]...)
+
+	insertAt := -1
+	if movedIdx+1 < len(names) {
+		// Moving earlier: insert immediately before the next conflict neighbour.
+		insertAt = slices.Index(order, names[movedIdx+1])
+	} else {
+		// Moving to the end: insert immediately after the previous neighbour.
+		prevIdx := slices.Index(order, names[movedIdx-1])
+		if prevIdx >= 0 {
+			insertAt = prevIdx + 1
 		}
 	}
-
-	_ = a.cfg.Save(a.cfgPath)
-	a.result.ApplyPriorities()
-
-	// Sync modlistOrder: keep all non-group entries in place, but redistribute
-	// the slots occupied by group members so they appear in the user's new order.
-	if len(a.modlistOrder) > 0 {
-		groupSlots := make([]int, 0, len(names))
-		for i, n := range a.modlistOrder {
-			if groupSet[n] {
-				groupSlots = append(groupSlots, i)
-			}
-		}
-		if len(groupSlots) == len(names) {
-			for i, slot := range groupSlots {
-				a.modlistOrder[slot] = names[i]
-			}
-		}
+	if insertAt < 0 {
+		return ScanResultDTO{}, fmt.Errorf("could not locate insertion point for %q", movedName)
 	}
+
+	order = slices.Insert(order, insertAt, movedName)
+	a.setModlistOrder(order)
 
 	return a.buildScanResult(), nil
 }
@@ -442,30 +404,7 @@ func (a *App) SetModlistOrder(names []string) (ScanResultDTO, error) {
 	if a.result == nil {
 		return ScanResultDTO{}, fmt.Errorf("no scan results")
 	}
-	a.modlistOrder = names
-	a.modlistSet = make(map[string]bool, len(names))
-	for _, n := range names {
-		a.modlistSet[n] = true
-	}
-
-	// Assign sequential priorities matching the new order and persist them so
-	// a rescan uses the same order for conflict win/loss computation.
-	modByName := make(map[string]*conflict.ModInfo, len(a.result.Mods))
-	for _, m := range a.result.Mods {
-		modByName[m.Name] = m
-	}
-	for _, m := range a.result.Mods {
-		m.Priority = 0
-	}
-	a.cfg.Priorities = make(map[string]int, len(names))
-	for i, name := range names {
-		if m, ok := modByName[name]; ok {
-			m.Priority = i + 1
-			a.cfg.Priorities[name] = i + 1
-		}
-	}
-	_ = a.cfg.Save(a.cfgPath)
-	a.result.ApplyPriorities()
+	a.setModlistOrder(names)
 
 	return a.buildScanResult(), nil
 }
@@ -655,6 +594,51 @@ func (a *App) modsInDisplayOrder() []*conflict.ModInfo {
 	}
 
 	return mods
+}
+
+// completeModlistOrder returns the full order displayed by the UI, including
+// archives that are on disk but not yet listed in modlist.txt. Missing entries
+// already present in modlist.txt are preserved in place.
+func (a *App) completeModlistOrder() []string {
+	order := append([]string(nil), a.modlistOrder...)
+	seen := make(map[string]bool, len(order))
+	for _, name := range order {
+		seen[name] = true
+	}
+	for _, m := range a.result.Mods {
+		if !seen[m.Name] {
+			order = append(order, m.Name)
+			seen[m.Name] = true
+		}
+	}
+
+	return order
+}
+
+// setModlistOrder makes the proposed modlist order and the internal priorities
+// describe the same load order, then recomputes conflict wins and losses.
+func (a *App) setModlistOrder(names []string) {
+	a.modlistOrder = append([]string(nil), names...)
+	a.modlistSet = make(map[string]bool, len(names))
+	for _, name := range names {
+		a.modlistSet[name] = true
+	}
+
+	modByName := make(map[string]*conflict.ModInfo, len(a.result.Mods))
+	for _, m := range a.result.Mods {
+		m.Priority = 0
+		modByName[m.Name] = m
+	}
+
+	a.cfg.Priorities = make(map[string]int, len(a.result.Mods))
+	for i, name := range names {
+		if m, ok := modByName[name]; ok {
+			m.Priority = i + 1
+			a.cfg.Priorities[name] = i + 1
+		}
+	}
+	_ = a.cfg.Save(a.cfgPath)
+	a.result.ApplyPriorities()
 }
 
 // ---- Private helpers -------------------------------------------------------
