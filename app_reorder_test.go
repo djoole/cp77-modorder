@@ -90,6 +90,71 @@ func TestReorderConflictGroupNoOpPreservesSpacing(t *testing.T) {
 	}
 }
 
+func TestReconcileSavedOrderRestoresUnappliedNewMod(t *testing.T) {
+	diskOrder := []string{"before.archive", "z-core.archive", "after.archive"}
+	a, mods := newReorderTestApp(t,
+		diskOrder,
+		[]string{"before.archive", "z-core.archive", "after.archive", "new.archive"},
+		"z-core.archive", "new.archive",
+	)
+
+	savedPriorities := map[string]int{
+		"before.archive": 1,
+		"new.archive":    2,
+		"z-core.archive": 3,
+		"after.archive":  4,
+	}
+	for name, priority := range savedPriorities {
+		mods[name].Priority = priority
+	}
+	a.cfg.Priorities = savedPriorities
+	a.result.ApplyPriorities()
+
+	order, diskSet := a.reconcileSavedOrder(diskOrder)
+	want := []string{"before.archive", "new.archive", "z-core.archive", "after.archive"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("reconciled order = %v, want %v", order, want)
+	}
+	if diskSet["new.archive"] {
+		t.Fatal("new archive should remain absent from the on-disk membership set")
+	}
+
+	a.modlistOrder = order
+	a.modlistSet = diskSet
+	result := a.buildScanResult()
+	if result.Rows[1].Name != "new.archive" || !result.Rows[1].Unlisted {
+		t.Fatalf("restored row = %+v, want new archive marked unlisted at its saved position", result.Rows[1])
+	}
+
+	if err := a.WriteModlist(); err != nil {
+		t.Fatalf("WriteModlist() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(a.modDir, "modlist.txt"))
+	if err != nil {
+		t.Fatalf("read modlist.txt: %v", err)
+	}
+	if got := strings.Fields(string(data)); !slices.Equal(got, want) {
+		t.Fatalf("written restored order = %v, want %v", got, want)
+	}
+}
+
+func TestReconcileSavedOrderLeavesUnprioritisedNewModAtBottom(t *testing.T) {
+	diskOrder := []string{"first.archive", "second.archive"}
+	a, _ := newReorderTestApp(t,
+		diskOrder,
+		[]string{"first.archive", "second.archive", "new.archive"},
+		"second.archive", "new.archive",
+	)
+
+	order, diskSet := a.reconcileSavedOrder(diskOrder)
+	if !slices.Equal(order, diskOrder) {
+		t.Fatalf("reconciled order = %v, want unchanged disk order %v", order, diskOrder)
+	}
+	if diskSet["new.archive"] {
+		t.Fatal("unprioritised new archive should not be in the on-disk membership set")
+	}
+}
+
 func newReorderTestApp(
 	t *testing.T,
 	modlistOrder []string,

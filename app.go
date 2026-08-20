@@ -260,14 +260,11 @@ func (a *App) Scan(dir string) (ScanResultDTO, error) {
 			}
 		}
 	}
-	a.modlistOrder = order
-	a.modlistSet = make(map[string]bool, len(order))
-	for _, n := range order {
-		a.modlistSet[n] = true
-	}
+	diskOrder := append([]string(nil), order...)
+	a.modlistOrder, a.modlistSet = a.reconcileSavedOrder(diskOrder)
 
-	snap := make([]string, len(order))
-	copy(snap, order)
+	snap := make([]string, len(diskOrder))
+	copy(snap, diskOrder)
 	a.initialModlistOrder = snap
 
 	// Persist the directory.
@@ -582,18 +579,72 @@ func (a *App) modsInDisplayOrder() []*conflict.ModInfo {
 		modByName[m.Name] = m
 	}
 	mods := make([]*conflict.ModInfo, 0, len(a.result.Mods))
+	seen := make(map[string]bool, len(a.modlistOrder))
 	for _, n := range a.modlistOrder {
 		if m, ok := modByName[n]; ok {
 			mods = append(mods, m)
+			seen[n] = true
 		}
 	}
 	for _, m := range a.result.Mods {
-		if !a.modlistSet[m.Name] {
+		if !seen[m.Name] {
 			mods = append(mods, m)
 		}
 	}
 
 	return mods
+}
+
+// reconcileSavedOrder restores a proposed, unapplied load order from persisted
+// priorities when it differs from the order currently written to modlist.txt.
+// The returned set deliberately describes disk membership, so a restored mod
+// that is still absent from modlist.txt remains marked as new in the UI.
+func (a *App) reconcileSavedOrder(diskOrder []string) ([]string, map[string]bool) {
+	diskSet := make(map[string]bool, len(diskOrder))
+	for _, name := range diskOrder {
+		diskSet[name] = true
+	}
+	if a.result == nil || len(a.cfg.Priorities) == 0 {
+		return append([]string(nil), diskOrder...), diskSet
+	}
+
+	known := make(map[string]bool, len(a.result.Mods))
+	resultListed := make([]string, 0, len(diskOrder))
+	hasPrioritisedUnlisted := false
+	for _, m := range a.result.Mods {
+		known[m.Name] = true
+		if diskSet[m.Name] {
+			resultListed = append(resultListed, m.Name)
+		} else if m.Priority > 0 {
+			hasPrioritisedUnlisted = true
+		}
+	}
+
+	diskKnown := make([]string, 0, len(diskOrder))
+	for _, name := range diskOrder {
+		if known[name] {
+			diskKnown = append(diskKnown, name)
+		}
+	}
+	if !hasPrioritisedUnlisted && slices.Equal(diskKnown, resultListed) {
+		return append([]string(nil), diskOrder...), diskSet
+	}
+
+	proposed := make([]string, 0, len(a.result.Mods)+len(diskOrder)-len(diskKnown))
+	for _, m := range a.result.Mods {
+		proposed = append(proposed, m.Name)
+	}
+	// Missing archives have no priority in result.Mods, but keeping them near
+	// their original line makes the restored order and Apply preview predictable.
+	for i, name := range diskOrder {
+		if known[name] {
+			continue
+		}
+		insertAt := min(i, len(proposed))
+		proposed = slices.Insert(proposed, insertAt, name)
+	}
+
+	return proposed, diskSet
 }
 
 // completeModlistOrder returns the full order displayed by the UI, including
@@ -662,17 +713,24 @@ func (a *App) buildScanResult() ScanResultDTO {
 		for _, m := range a.result.Mods {
 			modByName[m.Name] = m
 		}
-		// modlist.txt entries first.
+		// Proposed modlist entries first. Entries absent from the on-disk
+		// modlist remain marked as new when a saved order was restored.
+		seen := make(map[string]bool, len(a.modlistOrder))
 		for _, name := range a.modlistOrder {
 			if m, ok := modByName[name]; ok {
-				rows = append(rows, DisplayRowDTO{Mod: modToDTO(m, a.pathMap), Name: name})
+				rows = append(rows, DisplayRowDTO{
+					Mod:      modToDTO(m, a.pathMap),
+					Name:     name,
+					Unlisted: !a.modlistSet[name],
+				})
+				seen[name] = true
 			} else {
 				rows = append(rows, DisplayRowDTO{Mod: nil, Name: name, Missing: true})
 			}
 		}
-		// Unlisted mods (on disk, not in modlist.txt) at the bottom.
+		// Mods not already present in the proposed order go at the bottom.
 		for _, m := range a.result.Mods {
-			if !a.modlistSet[m.Name] {
+			if !seen[m.Name] {
 				rows = append(rows, DisplayRowDTO{Mod: modToDTO(m, a.pathMap), Name: m.Name, Unlisted: true})
 			}
 		}
