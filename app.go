@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ type App struct {
 	modlistOrder        []string
 	modlistSet          map[string]bool
 	initialModlistOrder []string          // snapshot of modlist order at last scan, used for Apply diff
-	pathMap             map[string]string // "0x<hex>" → human-readable resource path (from LXRS footers)
+	pathMap             map[string]string // "0x<hex>" → human-readable resource path
 	modStructure        string            // "default" | "MO2" — set from CLI flag, not persisted
 }
 
@@ -135,13 +136,7 @@ func (a *App) ScanMO2(instanceDir, profile string) (ScanResultDTO, error) {
 
 	a.result = conflict.Detect(archives, a.cfg.Priorities)
 
-	pathMap := make(map[string]string)
-	for _, ar := range archives {
-		for hash, path := range ar.FilePaths {
-			pathMap[fmt.Sprintf("0x%016x", hash)] = path
-		}
-	}
-	a.pathMap = pathMap
+	a.pathMap = buildResourcePathMap(archives, a.result, modsDir)
 
 	// Use the conflict-sorted order as the initial modlist order.
 	a.modlistOrder = make([]string, len(a.result.Mods))
@@ -239,14 +234,9 @@ func (a *App) Scan(dir string) (ScanResultDTO, error) {
 
 	a.result = conflict.Detect(archives, a.cfg.Priorities)
 
-	// Build a merged hash→path map from all archives that have LXRS data.
-	pathMap := make(map[string]string)
-	for _, ar := range archives {
-		for hash, path := range ar.FilePaths {
-			pathMap[fmt.Sprintf("0x%016x", hash)] = path
-		}
-	}
-	a.pathMap = pathMap
+	// Resolve conflicted resource hashes using archive metadata and, when
+	// available, WolvenKit's path database installed by CET.
+	a.pathMap = buildResourcePathMap(archives, a.result, dir)
 
 	if len(order) == 0 {
 		// No modlist.txt yet — create one with archives sorted alphabetically.
@@ -790,6 +780,32 @@ func modToDTO(m *conflict.ModInfo, pathMap map[string]string) *ModDTO {
 		MoreCount:     moreCount,
 		HasXL:         m.HasXL,
 	}
+}
+
+func buildResourcePathMap(archives []*archive.Archive, result *conflict.Result, scanDir string) map[string]string {
+	pathMap := make(map[string]string)
+	for _, ar := range archives {
+		for hash, path := range ar.FilePaths {
+			pathMap[fmt.Sprintf("0x%016x", hash)] = path
+		}
+	}
+
+	unresolved := make(map[uint64]struct{})
+	for _, entry := range result.Conflicts {
+		if _, found := pathMap[entry.Resource]; found {
+			continue
+		}
+		hash, err := strconv.ParseUint(strings.TrimPrefix(entry.Resource, "0x"), 16, 64)
+		if err == nil {
+			unresolved[hash] = struct{}{}
+		}
+	}
+
+	for hash, path := range archive.ResolveKnownPaths(scanDir, unresolved) {
+		pathMap[fmt.Sprintf("0x%016x", hash)] = path
+	}
+
+	return pathMap
 }
 
 // readModlistOrder reads modlist.txt from dir and returns the ordered mod names.

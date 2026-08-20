@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 // Archive represents a single .archive file and its internal file list.
@@ -271,14 +273,14 @@ func parse(path string) (*Archive, error) {
 
 	// Read each 56-byte FileEntry; only the name hash is needed.
 	var entry struct {
-		NameHash64               uint64
-		Timestamp                uint64
-		NumInlineBufferSegments  uint32
-		SegmentsStart            uint32
-		SegmentsEnd              uint32
+		NameHash64                uint64
+		Timestamp                 uint64
+		NumInlineBufferSegments   uint32
+		SegmentsStart             uint32
+		SegmentsEnd               uint32
 		ResourceDependenciesStart uint32
-		ResourceDependenciesEnd  uint32
-		SHA1Hash                 [20]byte
+		ResourceDependenciesEnd   uint32
+		SHA1Hash                  [20]byte
 	}
 	hashes := make([]uint64, 0, idxHdr.FileEntryCount)
 	for i := uint32(0); i < idxHdr.FileEntryCount; i++ {
@@ -288,7 +290,7 @@ func parse(path string) (*Archive, error) {
 		hashes = append(hashes, entry.NameHash64)
 	}
 
-	filePaths := parseLXRS(f) // nil when absent or malformed
+	filePaths := parseLXRS(f) // nil when absent, malformed, or not decompressible
 
 	return &Archive{
 		Name:       filepath.Base(path),
@@ -298,36 +300,77 @@ func parse(path string) (*Archive, error) {
 	}, nil
 }
 
-// parseLXRS attempts to read the optional LXRS footer at file offset 0xAC.
-// Returns nil on any error — non-fatal, caller falls back to hex hashes.
+// parseLXRS attempts to read the optional SRXL resource-path footer. Archive
+// tools call the structure LXRS, but its on-disk fourCC is "SRXL". Its string
+// table is usually Oodle-compressed.
+// Returns nil on any error — non-fatal, caller falls back to a hash database or
+// ultimately to hexadecimal hashes.
 func parseLXRS(f *os.File) map[uint64]string {
-	const lxrsOffset = 0xAC
+	const (
+		footerSizeOffset = 0x28
+		lxrsOffset       = 0xAC
+		maxFooterSize    = 64 * 1024 * 1024
+	)
+
+	if _, err := f.Seek(footerSizeOffset, io.SeekStart); err != nil {
+		return nil
+	}
+	var footerSize uint32
+	if err := binary.Read(f, binary.LittleEndian, &footerSize); err != nil || footerSize < 20 || footerSize > maxFooterSize {
+		return nil
+	}
 
 	if _, err := f.Seek(lxrsOffset, io.SeekStart); err != nil {
 		return nil
 	}
 
 	var hdr struct {
-		Magic       [4]byte
-		Version     uint32
-		StringCount uint32
-		Reserved    uint32
+		Magic          [4]byte
+		Version        uint32
+		RawSize        uint32
+		CompressedSize uint32
+		StringCount    uint32
 	}
 	if err := binary.Read(f, binary.LittleEndian, &hdr); err != nil {
 		return nil
 	}
-	if hdr.Magic != [4]byte{'L', 'X', 'R', 'S'} || hdr.Version != 1 || hdr.StringCount == 0 {
+	if hdr.Magic != [4]byte{'S', 'R', 'X', 'L'} || hdr.Version != 1 || hdr.StringCount == 0 ||
+		hdr.RawSize == 0 || hdr.RawSize > maxFooterSize || hdr.CompressedSize == 0 ||
+		hdr.CompressedSize > footerSize-20 {
+		return nil
+	}
+
+	payload := make([]byte, hdr.CompressedSize)
+	if _, err := io.ReadFull(f, payload); err != nil {
+		return nil
+	}
+	data := payload
+	if hdr.RawSize > hdr.CompressedSize {
+		oodlePath := findGameOodle(filepath.Dir(f.Name()))
+		if oodlePath == "" {
+			return nil
+		}
+		var err error
+		data, err = decompressOodle(payload, hdr.RawSize, oodlePath)
+		if err != nil {
+			return nil
+		}
+	} else if hdr.RawSize < hdr.CompressedSize {
 		return nil
 	}
 
 	paths := make(map[uint64]string, hdr.StringCount)
+	reader := strings.NewReader(string(data))
 	for i := uint32(0); i < hdr.StringCount; i++ {
-		s, err := readNullTermString(f)
+		s, err := readNullTermString(reader)
 		if err != nil {
 			break
 		}
 		if s != "" {
-			paths[fnv1a64(s)] = s
+			decoded, err := charmap.ISO8859_1.NewDecoder().String(s)
+			if err == nil {
+				paths[fnv1a64(decoded)] = decoded
+			}
 		}
 	}
 	if len(paths) == 0 {
