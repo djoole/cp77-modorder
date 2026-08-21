@@ -71,7 +71,8 @@ export function useWails() {
   }
 
   async function writeModlist() {
-    await App.WriteModlist()
+    const result = await App.WriteModlist()
+    store.updateScanResult(result)
     store.dirty = false
   }
 

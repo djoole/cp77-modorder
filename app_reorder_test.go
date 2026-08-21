@@ -35,7 +35,7 @@ func TestReorderConflictGroupAddsNewModToModlist(t *testing.T) {
 			mods["new.archive"].Wins, mods["existing.archive"].Losses)
 	}
 
-	if err := a.WriteModlist(); err != nil {
+	if _, err := a.WriteModlist(); err != nil {
 		t.Fatalf("WriteModlist() error = %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(a.modDir, "modlist.txt"))
@@ -126,7 +126,7 @@ func TestReconcileSavedOrderRestoresUnappliedNewMod(t *testing.T) {
 		t.Fatalf("restored row = %+v, want new archive marked unlisted at its saved position", result.Rows[1])
 	}
 
-	if err := a.WriteModlist(); err != nil {
+	if _, err := a.WriteModlist(); err != nil {
 		t.Fatalf("WriteModlist() error = %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(a.modDir, "modlist.txt"))
@@ -253,6 +253,34 @@ func TestRescanInsertsFreshArchivesAfterRestoringEarlierUnappliedNewMod(t *testi
 		if diskSet[name] {
 			t.Fatalf("%s should remain marked as new before Apply", name)
 		}
+	}
+}
+
+func TestWriteModlistClearsNewStateImmediately(t *testing.T) {
+	a, _ := newReorderTestApp(t,
+		[]string{"alpha.archive", "charlie.archive"},
+		[]string{"alpha.archive", "bravo.archive", "charlie.archive"},
+		"alpha.archive", "charlie.archive",
+	)
+	a.modlistOrder = insertNewArchivesASCII(a.modlistOrder, a.result.Mods)
+
+	before := a.buildScanResult()
+	if !before.Rows[1].Unlisted || before.Rows[1].Name != "bravo.archive" {
+		t.Fatalf("row before Apply = %+v, want bravo.archive marked new", before.Rows[1])
+	}
+
+	after, err := a.WriteModlist()
+	if err != nil {
+		t.Fatalf("WriteModlist() error = %v", err)
+	}
+	if after.Rows[1].Unlisted || after.Rows[1].Name != "bravo.archive" {
+		t.Fatalf("row after Apply = %+v, want bravo.archive no longer marked new", after.Rows[1])
+	}
+	if !a.modlistSet["bravo.archive"] {
+		t.Fatal("applied archive should be part of the in-memory modlist membership set")
+	}
+	if !slices.Equal(a.initialModlistOrder, []string{"alpha.archive", "bravo.archive", "charlie.archive"}) {
+		t.Fatalf("applied snapshot = %v", a.initialModlistOrder)
 	}
 }
 

@@ -483,28 +483,48 @@ func (a *App) RestoreBackup(filename string) (ScanResultDTO, error) {
 	return a.buildScanResult(), nil
 }
 
-// WriteModlist writes the mod order to disk.
+// WriteModlist writes the mod order to disk and returns the refreshed UI state.
 // In MO2 mode it rewrites the MO2 profile modlist.txt, reordering enabled entries
 // and preserving disabled mods and separators. In default mode it writes modlist.txt.
-func (a *App) WriteModlist() error {
+func (a *App) WriteModlist() (ScanResultDTO, error) {
 	if a.result == nil {
-		return fmt.Errorf("no scan results — run a scan first")
+		return ScanResultDTO{}, fmt.Errorf("no scan results — run a scan first")
 	}
 	if a.modStructure == "MO2" {
 		if a.cfg.MO2Dir == "" || a.cfg.MO2Profile == "" {
-			return fmt.Errorf("MO2 instance or profile not set — run a scan first")
+			return ScanResultDTO{}, fmt.Errorf("MO2 instance or profile not set — run a scan first")
 		}
-		return a.writeMO2Modlist()
+		if err := a.writeMO2Modlist(); err != nil {
+			return ScanResultDTO{}, err
+		}
+		a.acceptWrittenOrder()
+		return a.buildScanResult(), nil
 	}
 	if a.modDir == "" {
-		return fmt.Errorf("no mod directory set")
+		return ScanResultDTO{}, fmt.Errorf("no mod directory set")
 	}
 	if err := modlist.Write(a.modDir, a.modsInDisplayOrder(), ""); err != nil {
-		return err
+		return ScanResultDTO{}, err
 	}
 	_ = modlist.PruneBackups(filepath.Join(a.modDir, "modlist.old"), a.cfg.EffectiveBackupLimit())
+	a.acceptWrittenOrder()
 
-	return nil
+	return a.buildScanResult(), nil
+}
+
+// acceptWrittenOrder updates the in-memory disk snapshot after a successful
+// Apply so NEW badges and subsequent apply previews change immediately.
+func (a *App) acceptWrittenOrder() {
+	mods := a.modsInDisplayOrder()
+	names := make([]string, len(mods))
+	listed := make(map[string]bool, len(mods))
+	for i, mod := range mods {
+		names[i] = mod.Name
+		listed[mod.Name] = true
+	}
+	a.modlistOrder = names
+	a.modlistSet = listed
+	a.initialModlistOrder = append([]string(nil), names...)
 }
 
 // writeMO2Modlist rewrites the MO2 profile modlist.txt, preserving disabled mods
