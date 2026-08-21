@@ -138,20 +138,63 @@ func TestReconcileSavedOrderRestoresUnappliedNewMod(t *testing.T) {
 	}
 }
 
-func TestReconcileSavedOrderLeavesUnprioritisedNewModAtBottom(t *testing.T) {
+func TestInsertNewArchivesASCIIPlacesUnprioritisedModAtItsRank(t *testing.T) {
 	diskOrder := []string{"first.archive", "second.archive"}
 	a, _ := newReorderTestApp(t,
 		diskOrder,
-		[]string{"first.archive", "second.archive", "new.archive"},
-		"second.archive", "new.archive",
+		[]string{"first.archive", "second.archive", "middle.archive"},
+		"second.archive", "middle.archive",
 	)
 
 	order, diskSet := a.reconcileSavedOrder(diskOrder)
-	if !slices.Equal(order, diskOrder) {
-		t.Fatalf("reconciled order = %v, want unchanged disk order %v", order, diskOrder)
+	order = insertNewArchivesASCII(order, a.result.Mods)
+	want := []string{"first.archive", "middle.archive", "second.archive"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("completed order = %v, want ASCII insertion %v", order, want)
 	}
-	if diskSet["new.archive"] {
+	if diskSet["middle.archive"] {
 		t.Fatal("unprioritised new archive should not be in the on-disk membership set")
+	}
+}
+
+func TestInsertNewArchivesASCIIPreservesExistingManualOrder(t *testing.T) {
+	mods := []*conflict.ModInfo{
+		{Name: "alpha.archive"},
+		{Name: "bravo.archive"},
+		{Name: "charlie.archive"},
+		{Name: "delta.archive"},
+		{Name: "echo.archive"},
+	}
+	existing := []string{"charlie.archive", "alpha.archive", "echo.archive"}
+
+	got := insertNewArchivesASCII(existing, mods)
+	want := []string{"charlie.archive", "bravo.archive", "alpha.archive", "delta.archive", "echo.archive"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("completed order = %v, want %v", got, want)
+	}
+	retained := make([]string, 0, len(existing))
+	for _, name := range got {
+		if slices.Contains(existing, name) {
+			retained = append(retained, name)
+		}
+	}
+	if !slices.Equal(retained, existing) {
+		t.Fatalf("existing order changed from %v to %v", existing, retained)
+	}
+}
+
+func TestInsertNewArchivesASCIIUsesBytewiseNameOrder(t *testing.T) {
+	mods := []*conflict.ModInfo{
+		{Name: "lower.archive"},
+		{Name: "_underscore.archive"},
+		{Name: "9-digit.archive"},
+		{Name: "Upper.archive"},
+	}
+
+	got := insertNewArchivesASCII(nil, mods)
+	want := []string{"9-digit.archive", "Upper.archive", "_underscore.archive", "lower.archive"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("completed order = %v, want strict ASCII order %v", got, want)
 	}
 }
 

@@ -252,6 +252,15 @@ func (a *App) Scan(dir string) (ScanResultDTO, error) {
 	}
 	diskOrder := append([]string(nil), order...)
 	a.modlistOrder, a.modlistSet = a.reconcileSavedOrder(diskOrder)
+	completedOrder := insertNewArchivesASCII(a.modlistOrder, a.result.Mods)
+	if !slices.Equal(completedOrder, a.modlistOrder) {
+		// Make conflict wins/losses describe the same proposed order the UI shows.
+		// Keep modlistSet unchanged so newly discovered archives remain marked NEW
+		// until the proposed order is actually written to modlist.txt.
+		diskSet := a.modlistSet
+		a.setModlistOrder(completedOrder)
+		a.modlistSet = diskSet
+	}
 
 	snap := make([]string, len(diskOrder))
 	copy(snap, diskOrder)
@@ -635,6 +644,42 @@ func (a *App) reconcileSavedOrder(diskOrder []string) ([]string, map[string]bool
 	}
 
 	return proposed, diskSet
+}
+
+// insertNewArchivesASCII adds archives missing from the proposed order at their
+// ASCII rank without changing the relative order of entries already present.
+// This keeps a mostly alphabetical modlist tidy while preserving every manual
+// conflict-order adjustment the user has already made.
+func insertNewArchivesASCII(order []string, mods []*conflict.ModInfo) []string {
+	merged := append([]string(nil), order...)
+	seen := make(map[string]bool, len(merged)+len(mods))
+	for _, name := range merged {
+		seen[name] = true
+	}
+
+	newNames := make([]string, 0, len(mods))
+	for _, mod := range mods {
+		if !seen[mod.Name] {
+			newNames = append(newNames, mod.Name)
+			seen[mod.Name] = true
+		}
+	}
+	sort.Strings(newNames)
+
+	for _, name := range newNames {
+		// Use the archive's rank among all names rather than the first greater
+		// neighbour. That gives it its canonical ASCII line even when existing
+		// entries contain deliberate conflict-order exceptions.
+		insertAt := 0
+		for _, existing := range merged {
+			if existing < name {
+				insertAt++
+			}
+		}
+		merged = slices.Insert(merged, insertAt, name)
+	}
+
+	return merged
 }
 
 // completeModlistOrder returns the full order displayed by the UI, including
