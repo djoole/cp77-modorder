@@ -198,6 +198,64 @@ func TestInsertNewArchivesASCIIUsesBytewiseNameOrder(t *testing.T) {
 	}
 }
 
+func TestRescanInsertsFreshArchivesAfterRestoringEarlierUnappliedNewMod(t *testing.T) {
+	diskOrder := []string{
+		"axellysse_alpha.archive",
+		"axellysse_clothes.archive",
+		"axellysse_zeta.archive",
+	}
+	a, mods := newReorderTestApp(t,
+		diskOrder,
+		[]string{
+			"axellysse_alpha.archive",
+			"axellysse_atelier_store.archive",
+			"axellysse_clothes.archive",
+			"axellysse_zeta.archive",
+			"axellysse_pearls_swimsuit.archive",
+			"axellysse_virtual_atelier_2.archive",
+		},
+		"axellysse_alpha.archive", "axellysse_zeta.archive",
+	)
+
+	// atelier_store was discovered and inserted during the previous scan, but
+	// the user did not apply the resulting modlist. The other two archives are
+	// being seen for the first time during this rescan.
+	savedPriorities := map[string]int{
+		"axellysse_alpha.archive":         1,
+		"axellysse_atelier_store.archive": 2,
+		"axellysse_clothes.archive":       3,
+		"axellysse_zeta.archive":          4,
+	}
+	for name, priority := range savedPriorities {
+		mods[name].Priority = priority
+	}
+	a.cfg.Priorities = savedPriorities
+	a.result.ApplyPriorities()
+
+	order, diskSet := a.reconcileSavedOrder(diskOrder)
+	order = insertNewArchivesASCII(order, a.result.Mods)
+	want := []string{
+		"axellysse_alpha.archive",
+		"axellysse_atelier_store.archive",
+		"axellysse_clothes.archive",
+		"axellysse_pearls_swimsuit.archive",
+		"axellysse_virtual_atelier_2.archive",
+		"axellysse_zeta.archive",
+	}
+	if !slices.Equal(order, want) {
+		t.Fatalf("rescanned order = %v, want %v", order, want)
+	}
+	for _, name := range []string{
+		"axellysse_atelier_store.archive",
+		"axellysse_pearls_swimsuit.archive",
+		"axellysse_virtual_atelier_2.archive",
+	} {
+		if diskSet[name] {
+			t.Fatalf("%s should remain marked as new before Apply", name)
+		}
+	}
+}
+
 func newReorderTestApp(
 	t *testing.T,
 	modlistOrder []string,

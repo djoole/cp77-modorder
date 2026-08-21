@@ -631,7 +631,13 @@ func (a *App) reconcileSavedOrder(diskOrder []string) ([]string, map[string]bool
 
 	proposed := make([]string, 0, len(a.result.Mods)+len(diskOrder)-len(diskKnown))
 	for _, m := range a.result.Mods {
-		proposed = append(proposed, m.Name)
+		// Restore only entries whose position was already known: archives in the
+		// on-disk modlist or unlisted archives with a persisted priority. Archives
+		// discovered for the first time during this scan must remain absent here so
+		// insertNewArchivesASCII can place them at their canonical ASCII rank.
+		if diskSet[m.Name] || m.Priority > 0 {
+			proposed = append(proposed, m.Name)
+		}
 	}
 	// Missing archives have no priority in result.Mods, but keeping them near
 	// their original line makes the restored order and Apply preview predictable.
