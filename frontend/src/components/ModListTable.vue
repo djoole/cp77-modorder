@@ -35,7 +35,7 @@
             <tr :class="rowClass(row, idx)" @click="onRowClick(row, idx, $event)">
               <td><GripVertical class="drag-handle" :class="{ 'drag-handle--hidden': row.missing }" :size="14" /></td>
               <td>{{ row.missing ? '—' : idx + 1 }}</td>
-              <td :title="row.name">{{ truncate(row.name, 43) }}</td>
+              <td :title="row.name">{{ row.name }}</td>
               <td>{{ row.mod ? row.mod.fileCount : '—' }}</td>
               <td :class="row.mod && row.mod.conflictCount > 0 ? 'text-error' : ''">
                 {{ row.mod ? row.mod.conflictCount : '—' }}
@@ -62,7 +62,7 @@
           >
             <td><GripVertical class="drag-handle drag-handle--hidden" :size="14" /></td>
             <td>{{ row.missing ? '—' : idx + 1 }}</td>
-            <td :title="row.name">{{ truncate(row.name, 43) }}</td>
+            <td :title="row.name">{{ row.name }}</td>
             <td>{{ row.mod ? row.mod.fileCount : '—' }}</td>
             <td :class="row.mod && row.mod.conflictCount > 0 ? 'text-error' : ''">
               {{ row.mod ? row.mod.conflictCount : '—' }}
@@ -89,7 +89,6 @@ import { ref, computed, watch } from 'vue'
 import draggable from 'vuedraggable'
 import { GripVertical } from 'lucide-vue-next'
 import type { main } from '../../wailsjs/go/models'
-import { truncate } from '../utils'
 import { useWails } from '../composables/useWails'
 
 type RowEntry = { row: main.DisplayRowDTO; idx: number }
