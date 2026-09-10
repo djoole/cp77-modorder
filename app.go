@@ -738,16 +738,58 @@ func insertNewArchivesASCII(order []string, mods []*conflict.ModInfo) []string {
 	sort.Strings(newNames)
 
 	for _, name := range newNames {
-		insertAt := 0
-		for _, existing := range merged {
-			if existing < name {
-				insertAt++
-			}
-		}
+		insertAt := bestASCIIInsertionIndex(merged, name)
 		merged = slices.Insert(merged, insertAt, name)
 	}
 
 	return merged
+}
+
+// bestASCIIInsertionIndex finds the position that introduces the fewest ASCII
+// ordering inversions between a new archive and the existing proposed order.
+// Existing archives may have been moved manually, so their total count below a
+// name cannot safely be used as an absolute index. On ties, prefer a position
+// locally bracketed by lower and higher names, then the later position.
+func bestASCIIInsertionIndex(order []string, name string) int {
+	inversions := 0
+	for _, existing := range order {
+		if existing < name {
+			inversions++
+		}
+	}
+
+	bestIndex := 0
+	bestInversions := inversions
+	bestNeighbourScore := asciiNeighbourScore(order, name, 0)
+	for i, existing := range order {
+		switch {
+		case existing < name:
+			inversions--
+		case existing > name:
+			inversions++
+		}
+		index := i + 1
+		neighbourScore := asciiNeighbourScore(order, name, index)
+		if inversions < bestInversions ||
+			(inversions == bestInversions && neighbourScore >= bestNeighbourScore) {
+			bestIndex = index
+			bestInversions = inversions
+			bestNeighbourScore = neighbourScore
+		}
+	}
+
+	return bestIndex
+}
+
+func asciiNeighbourScore(order []string, name string, index int) int {
+	score := 0
+	if index > 0 && order[index-1] < name {
+		score++
+	}
+	if index < len(order) && name < order[index] {
+		score++
+	}
+	return score
 }
 
 // ---- Private helpers -------------------------------------------------------

@@ -47,7 +47,7 @@ func TestInsertNewArchivesASCIIPreservesExistingManualOrder(t *testing.T) {
 	existing := []string{"charlie.archive", "alpha.archive", "echo.archive"}
 
 	got := insertNewArchivesASCII(existing, mods)
-	want := []string{"charlie.archive", "bravo.archive", "alpha.archive", "delta.archive", "echo.archive"}
+	want := []string{"charlie.archive", "alpha.archive", "bravo.archive", "delta.archive", "echo.archive"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("completed order = %v, want %v", got, want)
 	}
@@ -60,6 +60,96 @@ func TestInsertNewArchivesASCIIPreservesExistingManualOrder(t *testing.T) {
 	}
 	if !slices.Equal(retained, existing) {
 		t.Fatalf("existing order changed from %v to %v", existing, retained)
+	}
+}
+
+func TestInsertNewArchivesASCIIIsNotShiftedByLowerNamedArchiveAtBottom(t *testing.T) {
+	tests := []struct {
+		name     string
+		archive  string
+		existing []string
+		want     []string
+	}{
+		{
+			name:    "HardestToBeGrowlFM",
+			archive: "HardestToBeGrowlFM.archive",
+			existing: []string{
+				"Hailey_Task_Force_Outfit_XL.archive",
+				"HeresBrendan.archive",
+				"HighResNPCBodies.archive",
+				"HD Reworked Project.archive",
+			},
+			want: []string{
+				"Hailey_Task_Force_Outfit_XL.archive",
+				"HardestToBeGrowlFM.archive",
+				"HeresBrendan.archive",
+				"HighResNPCBodies.archive",
+				"HD Reworked Project.archive",
+			},
+		},
+		{
+			name:    "ITP-TCOC2",
+			archive: "ITP-TCOC2.archive",
+			existing: []string{
+				"ITP-TCOC.archive",
+				"Iconic Cyberarm Pack.archive",
+				"IdleAnywhere.archive",
+				"HD Reworked Project.archive",
+			},
+			want: []string{
+				"ITP-TCOC.archive",
+				"ITP-TCOC2.archive",
+				"Iconic Cyberarm Pack.archive",
+				"IdleAnywhere.archive",
+				"HD Reworked Project.archive",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mods := make([]*conflict.ModInfo, 0, len(tt.existing)+1)
+			for _, name := range tt.existing {
+				mods = append(mods, &conflict.ModInfo{Name: name})
+			}
+			mods = append(mods, &conflict.ModInfo{Name: tt.archive})
+
+			got := insertNewArchivesASCII(tt.existing, mods)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("completed order = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInsertNewArchivesASCIIHandlesMultipleLowerNamedOutliers(t *testing.T) {
+	existing := []string{
+		"Hailey.archive",
+		"Heres.archive",
+		"High.archive",
+		"A-manually-moved.archive",
+		"B-manually-moved.archive",
+	}
+	mods := []*conflict.ModInfo{
+		{Name: "Hailey.archive"},
+		{Name: "Hardest.archive"},
+		{Name: "Heres.archive"},
+		{Name: "High.archive"},
+		{Name: "A-manually-moved.archive"},
+		{Name: "B-manually-moved.archive"},
+	}
+
+	got := insertNewArchivesASCII(existing, mods)
+	want := []string{
+		"Hailey.archive",
+		"Hardest.archive",
+		"Heres.archive",
+		"High.archive",
+		"A-manually-moved.archive",
+		"B-manually-moved.archive",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("completed order = %v, want %v", got, want)
 	}
 }
 
